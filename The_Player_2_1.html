@@ -1,0 +1,1333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BeatSync Player</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505; 
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        #bg-canvas {
+            position: absolute;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            z-index: 0; pointer-events: none;
+            filter: blur(120px) saturate(200%);
+            transform: scale(1.4); 
+            background-color: #000;
+        }
+
+        #particle-canvas, #visualizer-canvas {
+            position: absolute;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            z-index: 1; pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+
+        .ui-layer {
+            position: relative;
+            z-index: 10;
+            display: flex; flex-direction: column; height: 100vh;
+            background: radial-gradient(circle at center, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.4) 100%);
+        }
+
+        .top-bar {
+            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(15px);
+            position: relative;
+            z-index: 50;
+        }
+
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 12px; width: 12px; border-radius: 50%;
+            background: #fff; cursor: pointer; margin-top: -4px; box-shadow: 0 0 10px rgba(255,255,255,0.5);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 4px; cursor: pointer; background: rgba(255, 255, 255, 0.3); border-radius: 2px;
+        }
+        
+        .pulse-anim { transition: transform 0.05s ease-out, box-shadow 0.05s ease-out; }
+        img { object-fit: cover; }
+        .text-shadow { text-shadow: 0 2px 10px rgba(0,0,0,0.5); }
+
+        /* --- ADVANCED LYRICS UI STYLES --- */
+        .lyrics-mask {
+            -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%);
+            mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%);
+        }
+        
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        .lyric-line {
+            transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.5s ease, filter 0.5s ease;
+            transform-origin: center left;
+            opacity: 0.3; /* Gray inactive state */
+            filter: blur(2px);
+            padding: 10px 0;
+            line-height: 1.3;
+        }
+        
+        .lyric-line.active {
+            transform: scale(1.05);
+            opacity: 1 !important;
+            filter: blur(0px) drop-shadow(0 0 15px rgba(255, 255, 255, 0.2));
+        }
+
+        .lyric-word {
+            display: inline-block;
+            white-space: pre-wrap;
+            background: linear-gradient(to right, 
+                #ffffff calc(var(--fill) - 10%), 
+                #ffffff var(--fill), 
+                rgba(255, 255, 255, 0.3) calc(var(--fill) + 10%), 
+                rgba(255, 255, 255, 0.3) 100%
+            );
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            transition: --fill 0.1s linear; 
+        }
+
+        .embedded-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            background: rgba(255,255,255,0.12);
+            border: 1px solid rgba(255,255,255,0.25);
+            border-radius: 20px;
+            padding: 3px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            color: rgba(255,255,255,0.7);
+            backdrop-filter: blur(8px);
+            pointer-events: none;
+            user-select: none;
+        }
+
+        .waiting-dots-container {
+            display: flex;
+            align-items: center;
+            height: 60px;
+        }
+
+        .waiting-dots {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .dot {
+            width: 12px;
+            height: 12px;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            transition: background-color 0.4s;
+        }
+
+        .lyric-line.active .dot {
+            animation: appleWave 1.4s infinite ease-in-out;
+            background: white;
+        }
+
+        .dot:nth-child(1) { animation-delay: 0s; }
+        .dot:nth-child(2) { animation-delay: 0.2s; }
+        .dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes appleWave {
+            0%, 100% { transform: translateY(0) scale(1); box-shadow: none; opacity: 0.5; }
+            50% { transform: translateY(-6px) scale(1.15); box-shadow: 0 0 15px rgba(255,255,255,0.8); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Hidden Easter Egg -->
+    <div id="easterEgg" class="fixed bottom-3 right-4 text-[11px] text-white/20 font-mono tracking-widest pointer-events-none select-none z-50 transition-opacity duration-1000 opacity-0">
+        Dedicated to all my exes.
+    </div>
+
+    <canvas id="bg-canvas"></canvas>
+    <canvas id="particle-canvas"></canvas>
+    <canvas id="visualizer-canvas"></canvas>
+
+    <div class="ui-layer">
+        
+        <!-- Playlist Sidebar/Panel -->
+        <div id="playlistPanel" class="absolute top-24 right-4 w-[22rem] md:w-96 max-h-[70vh] bg-black/80 backdrop-blur-xl rounded-xl border border-white/20 shadow-2xl flex flex-col hidden z-50 overflow-hidden transition-all duration-300">
+            <div class="p-4 border-b border-white/20 font-bold text-white flex justify-between items-center bg-white/5">
+                <span class="flex items-center gap-2"><i data-lucide="list-music" class="w-4 h-4"></i> Playlist</span>
+                <span id="playlistCount" class="text-xs text-white/50 bg-white/10 px-2 py-1 rounded-full">0 tracks</span>
+            </div>
+            <div id="playlistContainer" class="flex-grow overflow-y-auto no-scrollbar p-2 flex flex-col gap-1.5">
+                <div class="text-white/50 text-sm text-center py-6">No tracks uploaded</div>
+            </div>
+        </div>
+
+        <div class="top-bar flex items-center justify-between p-3 h-24">
+            
+            <div class="flex items-center gap-4 flex-grow max-w-[70%]">
+                <div class="w-16 h-16 bg-black/50 border-2 border-white/50 flex-shrink-0 flex items-center justify-center overflow-hidden rounded-sm shadow-lg">
+                    <img id="topCoverArt" src="" alt="Cover" class="w-full h-full opacity-0 transition-opacity duration-500" crossorigin="anonymous">
+                    <i data-lucide="music" id="topCoverPlaceholder" class="w-8 h-8 text-gray-400 absolute"></i>
+                </div>
+
+                <div class="flex-grow flex flex-col justify-between h-full py-1">
+                    <div class="text-left font-bold tracking-wider text-sm truncate px-4 text-shadow" id="topTrackTitle">
+                        WAITING FOR TRACK...
+                    </div>
+                    
+                    <div class="flex items-center gap-2 px-2">
+                        <span id="currentTime" class="text-xs text-white/80 font-medium w-8 text-right text-shadow">0:00</span>
+                        <input type="range" id="progressBar" value="0" min="0" max="100" class="flex-grow">
+                        <span id="durationTime" class="text-xs text-white/80 font-medium w-8 text-shadow">0:00</span>
+                    </div>
+
+                    <div class="flex items-center justify-start gap-6 mt-1 text-white px-2">
+                        <button id="prevBtn" class="hover:text-gray-300 transition-colors hover:scale-110 transform drop-shadow-lg"><i data-lucide="skip-back" class="w-5 h-5"></i></button>
+                        <button id="playPauseBtn" class="hover:text-gray-300 transition-colors hover:scale-110 transform drop-shadow-lg">
+                            <i data-lucide="play" class="w-6 h-6 fill-white" id="playIcon"></i>
+                            <i data-lucide="pause" class="w-6 h-6 fill-white hidden" id="pauseIcon"></i>
+                        </button>
+                        <button id="nextBtn" class="hover:text-gray-300 transition-colors hover:scale-110 transform drop-shadow-lg"><i data-lucide="skip-forward" class="w-5 h-5"></i></button>
+
+                        <button id="lyricsBtn" class="hover:text-gray-300 transition-colors hover:scale-110 transform drop-shadow-lg opacity-60 ml-2" title="Toggle Lyrics">
+                            <i data-lucide="mic-2" class="w-5 h-5"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Side Controls -->
+            <div class="flex items-center gap-4 pr-4 border-l border-white/10 pl-6 h-full">
+                
+                <div class="flex items-center gap-2 w-24 hidden md:flex mr-2">
+                    <i data-lucide="volume-2" class="w-4 h-4 text-white/80 drop-shadow-md"></i>
+                    <input type="range" id="volumeBar" value="100" min="0" max="100" class="flex-grow">
+                </div>
+
+                <button id="visToggleBtn" class="hover:text-white transition-colors hover:scale-110 transform drop-shadow-lg text-white/80 p-2" title="Toggle Visualizer">
+                    <i data-lucide="eye" class="w-5 h-5"></i>
+                </button>
+
+                <button id="playlistToggleBtn" class="hover:text-white transition-colors hover:scale-110 transform drop-shadow-lg text-white/80 p-2" title="Toggle Playlist">
+                    <i data-lucide="list-music" class="w-5 h-5"></i>
+                </button>
+                
+                <label for="fileInput" class="cursor-pointer px-4 py-2 bg-white/10 text-white rounded-full hover:bg-white/30 backdrop-blur-md transition-colors border border-white/20 shadow-lg flex items-center gap-2 font-bold text-xs tracking-wide ml-2" title="Upload MP3s">
+                    <i data-lucide="upload" class="w-4 h-4"></i>
+                    <span>UPLOAD</span>
+                    <input type="file" id="fileInput" accept="audio/mp3, audio/mpeg, audio/flac, .flac" class="hidden" multiple>
+                </label>
+
+            </div>
+
+        </div>
+
+        <main class="flex-grow flex flex-col items-center justify-center pb-32 relative w-full overflow-hidden">
+            
+            <div id="coverView" class="flex flex-col items-center justify-center gap-12 w-full transition-all duration-500 z-10">
+                <div class="border border-white/20 bg-black/20 backdrop-blur-md px-12 py-6 rounded-2xl shadow-2xl">
+                    <h1 id="mainTrackTitle" class="text-4xl md:text-5xl font-extrabold tracking-widest text-center uppercase text-white drop-shadow-[0_2px_15px_rgba(0,0,0,0.8)]">BEATSYNC</h1>
+                    <h2 id="mainArtistName" class="text-xl text-center text-white/80 mt-2 font-medium tracking-wide drop-shadow-[0_2px_8px_rgba(0,0,0,0.8)]">PLAYER</h2>
+                </div>
+
+                <div class="relative w-64 h-64 md:w-80 md:h-80">
+                    <div id="coverWrapper" class="w-full h-full rounded-full border-4 border-white/80 shadow-[0_0_50px_rgba(0,0,0,0.5)] overflow-hidden pulse-anim bg-black/40 flex items-center justify-center">
+                        <img id="mainCoverArt" src="" alt="Cover Art" class="w-full h-full opacity-0 transition-opacity duration-1000" crossorigin="anonymous">
+                        <span id="mainCoverText" class="absolute font-bold tracking-widest text-white/50">NO DISC</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="lyricsView" class="absolute inset-0 pt-12 pb-32 w-full h-full flex items-center justify-center lyrics-mask z-20 pointer-events-none opacity-0 translate-y-8 transition-all duration-500">
+                <div id="lyricsContainer" class="w-full max-w-4xl h-full overflow-y-auto no-scrollbar scroll-smooth flex flex-col items-start px-8 md:px-16 gap-4 pointer-events-none text-white font-bold">
+                    <!-- Dynamic Lyrics -->
+                </div>
+
+                <div id="syncWrapper" class="absolute bottom-8 right-8 z-30 flex flex-col items-end gap-2 pointer-events-none opacity-80 hover:opacity-100 transition-opacity">
+                    <div id="syncPanel" class="bg-black/80 backdrop-blur-xl p-5 rounded-2xl border border-white/20 text-sm hidden shadow-[0_0_30px_rgba(0,0,0,0.8)] mb-2 origin-bottom-right transition-all">
+                        <div class="font-bold text-white mb-4 border-b border-white/20 pb-2">Fix Lyric Sync</div>
+                        <div class="flex flex-col gap-4">
+                            <div class="flex items-center justify-between gap-6">
+                                <span class="text-white/80">Offset:</span>
+                                <div class="flex items-center gap-3 bg-white/5 rounded-lg p-1">
+                                    <button id="offsetMinus" class="w-8 h-8 flex items-center justify-center bg-white/10 rounded hover:bg-white/20 transition">-</button>
+                                    <span id="offsetValue" class="w-12 text-center font-mono">0.0s</span>
+                                    <button id="offsetPlus" class="w-8 h-8 flex items-center justify-center bg-white/10 rounded hover:bg-white/20 transition">+</button>
+                                </div>
+                            </div>
+                            <div class="flex items-center justify-between gap-6">
+                                <span class="text-white/80">Stretch:</span>
+                                <div class="flex items-center gap-3 bg-white/5 rounded-lg p-1">
+                                    <button id="stretchMinus" class="w-8 h-8 flex items-center justify-center bg-white/10 rounded hover:bg-white/20 transition">-</button>
+                                    <span id="stretchValue" class="w-12 text-center font-mono">1.00x</span>
+                                    <button id="stretchPlus" class="w-8 h-8 flex items-center justify-center bg-white/10 rounded hover:bg-white/20 transition">+</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <button id="syncToggleBtn" class="p-3 px-4 bg-black/60 backdrop-blur-md rounded-full border border-white/20 hover:bg-white/20 transition-colors text-white flex items-center gap-2 shadow-lg">
+                        <i data-lucide="sliders" class="w-4 h-4"></i><span class="text-xs font-bold tracking-wide uppercase">Sync Tools</span>
+                    </button>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <audio id="audioElement" crossorigin="anonymous"></audio>
+
+    <script>
+        lucide.createIcons();
+
+        // DOM Elements
+        const fileInput = document.getElementById('fileInput');
+        
+        const topCoverArt = document.getElementById('topCoverArt');
+        const topCoverPlaceholder = document.getElementById('topCoverPlaceholder');
+        const topTrackTitle = document.getElementById('topTrackTitle');
+        const currentTimeEl = document.getElementById('currentTime');
+        const durationTimeEl = document.getElementById('durationTime');
+        const progressBar = document.getElementById('progressBar');
+        const volumeBar = document.getElementById('volumeBar');
+        
+        const playPauseBtn = document.getElementById('playPauseBtn');
+        const playIcon = document.getElementById('playIcon');
+        const pauseIcon = document.getElementById('pauseIcon');
+        const prevBtn = document.getElementById('prevBtn');
+        const nextBtn = document.getElementById('nextBtn');
+        
+        const lyricsBtn = document.getElementById('lyricsBtn');
+        const visToggleBtn = document.getElementById('visToggleBtn');
+        const playlistToggleBtn = document.getElementById('playlistToggleBtn');
+        const playlistPanel = document.getElementById('playlistPanel');
+        const playlistContainer = document.getElementById('playlistContainer');
+        const playlistCount = document.getElementById('playlistCount');
+
+        const coverView = document.getElementById('coverView');
+        const lyricsView = document.getElementById('lyricsView');
+        const lyricsContainer = document.getElementById('lyricsContainer');
+        const syncWrapper = document.getElementById('syncWrapper');
+        
+        const mainTrackTitle = document.getElementById('mainTrackTitle');
+        const mainArtistName = document.getElementById('mainArtistName');
+        const mainCoverArt = document.getElementById('mainCoverArt');
+        const mainCoverText = document.getElementById('mainCoverText');
+        const coverWrapper = document.getElementById('coverWrapper');
+
+        const audioElement = document.getElementById('audioElement');
+        const bgCanvas = document.getElementById('bg-canvas');
+        const particleCanvas = document.getElementById('particle-canvas');
+        const visCanvas = document.getElementById('visualizer-canvas');
+        
+        const syncPanel = document.getElementById('syncPanel');
+        const syncToggleBtn = document.getElementById('syncToggleBtn');
+        const offsetMinus = document.getElementById('offsetMinus');
+        const offsetPlus = document.getElementById('offsetPlus');
+        const offsetValue = document.getElementById('offsetValue');
+        const stretchMinus = document.getElementById('stretchMinus');
+        const stretchPlus = document.getElementById('stretchPlus');
+        const stretchValue = document.getElementById('stretchValue');
+        const easterEgg = document.getElementById('easterEgg');
+
+        const bgCtx = bgCanvas.getContext('2d');
+        const partCtx = particleCanvas.getContext('2d');
+        const visCtx = visCanvas.getContext('2d');
+
+        // State
+        let isPlaying = false;
+        let showVisualizer = true;
+        
+        // Playlist State
+        let playlist = [];
+        let currentTrackIndex = -1;
+        let playlistUpdateTimeout = null;
+
+        let audioContext;
+        let analyser;
+        let source;
+        let dataArray;
+        let particles = [];
+        let orbs = [];
+        let extractedColors = [[255, 45, 85], [88, 86, 214], [255, 149, 0], [90, 200, 250]]; 
+        let animationId;
+
+        // Lyrics & Demo State
+        let isLyricsView = false;
+        let currentLyrics = []; 
+        let currentLyricIndex = -1;
+        let lyricOffset = 0.0;
+        let lyricStretch = 1.00;
+        
+        let lyricSparks = [];
+        let wipeX = -100;
+        let wipeY = -100;
+        let isWiping = false;
+
+        let isDemoMode = true; 
+        let demoScrollPos = 0;
+
+        // --- Visualizer Classes ---
+        class Orb {
+            constructor() {
+                this.x = Math.random() * window.innerWidth;
+                this.y = Math.random() * window.innerHeight;
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = (Math.random() - 0.5) * 2;
+                this.baseRadius = Math.max(window.innerWidth, window.innerHeight) * (Math.random() * 0.5 + 0.4); 
+                this.radius = this.baseRadius;
+            }
+            update(bassIntensity = 0) {
+                let speedMultiplier = 1 + (bassIntensity / 30);
+                this.x += this.vx * speedMultiplier;
+                this.y += this.vy * speedMultiplier;
+                
+                const bounds = this.baseRadius * 0.5;
+                if(this.x < -bounds || this.x > window.innerWidth + bounds) this.vx *= -1;
+                if(this.y < -bounds || this.y > window.innerHeight + bounds) this.vy *= -1;
+
+                this.radius = this.baseRadius + (bassIntensity * 5); 
+            }
+            draw(ctx, color) {
+                if(!color) return;
+                const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius);
+                grad.addColorStop(0, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 1)`);
+                grad.addColorStop(0.5, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.8)`);
+                grad.addColorStop(1, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0)`);
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2);
+                ctx.fill();
+            }
+        }
+
+        class Particle {
+            constructor() {
+                this.baseX = Math.random() * window.innerWidth;
+                this.baseY = Math.random() * window.innerHeight;
+                this.x = this.baseX;
+                this.y = this.baseY;
+                this.angle = (Math.random() > 0.5 ? 0 : Math.PI) + (Math.random() - 0.5); 
+                this.baseOpacity = Math.random() * 0.3 + 0.1;
+                this.opacity = this.baseOpacity;
+                this.radius = Math.random() * 3.5 + 1.5;
+                this.timeOffset = Math.random() * 1000;
+                this.pickColor();
+            }
+            pickColor() { this.color = extractedColors[Math.floor(Math.random() * extractedColors.length)]; }
+            update(bassIntensity) {
+                let normalizedBass = bassIntensity / 255;
+                if (normalizedBass > 0.75) {
+                    let flightSpeed = (normalizedBass - 0.7) * 50; 
+                    this.baseX += Math.cos(this.angle) * flightSpeed;
+                    this.baseY += Math.sin(this.angle) * flightSpeed;
+                    if (this.baseX < -20) this.baseX = window.innerWidth + 20;
+                    if (this.baseX > window.innerWidth + 20) this.baseX = -20;
+                    if (this.baseY < -20) this.baseY = window.innerHeight + 20;
+                    if (this.baseY > window.innerHeight + 20) this.baseY = -20;
+                }
+                let beatBump = normalizedBass * 140; 
+                let slowDriftX = Math.sin(Date.now() * 0.0005 + this.timeOffset) * 30;
+                let slowDriftY = Math.cos(Date.now() * 0.0007 + this.timeOffset) * 30;
+                this.x = this.baseX + slowDriftX + Math.cos(this.angle) * beatBump;
+                this.y = this.baseY + slowDriftY + Math.sin(this.angle) * beatBump;
+                this.opacity = Math.min(1, this.baseOpacity + normalizedBass * 0.8);
+            }
+            draw(ctx) {
+                if(!this.color) return;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255, 255, 255, ${this.opacity})`; 
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = `rgba(${this.color[0]}, ${this.color[1]}, ${this.color[2]}, ${this.opacity})`;
+                ctx.fill();
+                ctx.shadowBlur = 0; 
+            }
+        }
+
+        class LyricSpark {
+            constructor(x, y) {
+                this.x = x + (Math.random() * 15 - 7.5);
+                this.y = y + (Math.random() * 15 - 7.5);
+                this.vx = (Math.random() - 0.5) * 3;
+                this.vy = Math.random() * -3 - 1; 
+                this.life = 1.0;
+                this.decay = Math.random() * 0.04 + 0.02;
+                this.size = Math.random() * 4 + 1.5;
+                this.color = extractedColors[Math.floor(Math.random() * extractedColors.length)] || [255,255,255];
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.life -= this.decay;
+                return this;
+            }
+            draw(ctx) {
+                if (this.life <= 0) return;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255,255,255, ${this.life})`;
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = `rgba(${this.color[0]}, ${this.color[1]}, ${this.color[2]}, ${this.life})`;
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        function initParticles() {
+            particles = [];
+            for(let i=0; i<450; i++) particles.push(new Particle());
+            orbs = [];
+            for(let i=0; i<8; i++) orbs.push(new Orb());
+        }
+
+        function resizeCanvases() {
+            bgCanvas.width = window.innerWidth; bgCanvas.height = window.innerHeight;
+            particleCanvas.width = window.innerWidth; particleCanvas.height = window.innerHeight;
+            visCanvas.width = window.innerWidth; visCanvas.height = window.innerHeight;
+            initParticles();
+        }
+        window.addEventListener('resize', resizeCanvases);
+        resizeCanvases();
+
+        // --- Demo State Engine ---
+        function loadDemoLyrics() {
+            const demoLines = [
+                "Welcome to BeatSync Player",
+                "Your personal offline music experience",
+                "Upload bulk MP3 files to begin",
+                "The player will build your playlist",
+                "And instantly fetch synchronized lyrics",
+                "Enjoy the immersive visualizers",
+                "And sing along to your favorite tracks",
+                "Sit back, relax, and feel the rhythm",
+                "(Waiting for your music...)"
+            ];
+            
+            currentLyrics = demoLines.map((text, i) => ({
+                time: i,
+                text: text,
+                duration: 1,
+                isDots: false
+            }));
+            
+            renderSyncedLyrics();
+            isDemoMode = true;
+            demoScrollPos = 0;
+        }
+
+        function extractMetadataFromFilename(filename) {
+            let baseName = filename.replace(/\.[^/.]+$/, ""); 
+            let artist = "Unknown Artist";
+            let track = baseName;
+
+            if (baseName.includes(" - ")) {
+                const parts = baseName.split(" - ");
+                artist = parts[0].trim();
+                track = parts.slice(1).join(" - ").trim();
+            } else if (baseName.includes("-")) {
+                const parts = baseName.split("-");
+                artist = parts[0].trim();
+                track = parts.slice(1).join("-").trim();
+            }
+
+            const cleanUp = (str) => {
+                return str.replace(/\[.*?\]/g, '') 
+                          .replace(/\(.*?\)/g, '') 
+                          .replace(/\{.*?\}/g, '') 
+                          .trim();
+            };
+
+            return { artist: cleanUp(artist) || "Unknown Artist", track: cleanUp(track) || "Unknown Track" };
+        }
+
+        // --- FLAC VORBIS COMMENT LYRICS EXTRACTOR ---
+
+        /**
+         * Reads a FLAC file's Vorbis comment block and returns an object with
+         * any LYRICS (plain LRC or plain text) and SYNCEDLYRICS (LRC) fields.
+         * Returns null if the file is not FLAC or has no lyrics tags.
+         */
+        async function extractFlacLyrics(file) {
+            try {
+                // FLAC files start with "fLaC" magic
+                const headerBuf = await file.slice(0, 4).arrayBuffer();
+                const magic = new Uint8Array(headerBuf);
+                if (magic[0] !== 0x66 || magic[1] !== 0x4C || magic[2] !== 0x61 || magic[3] !== 0x43) {
+                    return null; // not a FLAC
+                }
+
+                // Read first 4MB to find Vorbis comment block (block type 4)
+                const chunkSize = Math.min(4 * 1024 * 1024, file.size);
+                const buf = await file.slice(0, chunkSize).arrayBuffer();
+                const view = new DataView(buf);
+                let offset = 4; // skip "fLaC"
+
+                while (offset < buf.byteLength - 4) {
+                    const blockHeader = view.getUint8(offset);
+                    const isLast = (blockHeader & 0x80) !== 0;
+                    const blockType = blockHeader & 0x7F;
+
+                    const blockLen = (view.getUint8(offset + 1) << 16) |
+                                     (view.getUint8(offset + 2) << 8) |
+                                      view.getUint8(offset + 3);
+                    offset += 4;
+
+                    if (blockType === 4) {
+                        // Vorbis comment block
+                        const decoder = new TextDecoder('utf-8');
+                        let pos = offset;
+
+                        // Vendor string length (little-endian u32)
+                        const vendorLen = view.getUint32(pos, true); pos += 4;
+                        pos += vendorLen; // skip vendor string
+
+                        // Number of comments
+                        const numComments = view.getUint32(pos, true); pos += 4;
+
+                        let syncedLyrics = null;
+                        let plainLyrics = null;
+
+                        for (let i = 0; i < numComments; i++) {
+                            if (pos + 4 > buf.byteLength) break;
+                            const commentLen = view.getUint32(pos, true); pos += 4;
+                            if (pos + commentLen > buf.byteLength) break;
+                            const commentBytes = new Uint8Array(buf, pos, commentLen);
+                            const comment = decoder.decode(commentBytes);
+                            pos += commentLen;
+
+                            const eqIdx = comment.indexOf('=');
+                            if (eqIdx === -1) continue;
+                            const key = comment.slice(0, eqIdx).toUpperCase();
+                            const value = comment.slice(eqIdx + 1);
+
+                            if (key === 'SYNCEDLYRICS' || key === 'LYRICS:SYNCED') {
+                                syncedLyrics = value;
+                            } else if (key === 'LYRICS' || key === 'UNSYNCEDLYRICS' || key === 'LYRICS:UNSYNCED') {
+                                // Auto-detect: if the LYRICS field contains LRC timestamps, treat as synced
+                                if (/\[\d{2}:\d{2}[\.\:]\d{2}/.test(value)) {
+                                    syncedLyrics = value;
+                                } else {
+                                    plainLyrics = value;
+                                }
+                            }
+                        }
+
+                        if (syncedLyrics || plainLyrics) {
+                            return { syncedLyrics, plainLyrics };
+                        }
+                        return null; // block found but no lyrics tags
+                    }
+
+                    offset += blockLen;
+                    if (isLast) break;
+                }
+                return null;
+            } catch (e) {
+                console.warn('FLAC lyrics extraction failed:', e);
+                return null;
+            }
+        }
+
+        function showEmbeddedBadge() {
+            // Remove any existing badge
+            const old = document.getElementById('embeddedLyricsBadge');
+            if (old) old.remove();
+
+            const badge = document.createElement('div');
+            badge.id = 'embeddedLyricsBadge';
+            badge.className = 'embedded-badge absolute top-4 left-1/2 -translate-x-1/2';
+            badge.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Embedded in file`;
+            // Attach to lyricsView
+            lyricsView.appendChild(badge);
+        }
+
+        function hideEmbeddedBadge() {
+            const old = document.getElementById('embeddedLyricsBadge');
+            if (old) old.remove();
+        }
+
+        async function fetchLyrics(artist, track, embeddedLyricsData) {
+            lyricsContainer.innerHTML = '<p class="text-white/50 text-2xl animate-pulse mt-32 w-full text-center">Searching for lyrics...</p>';
+            currentLyrics = []; currentLyricIndex = -1; lyricOffset = 0.0; lyricStretch = 1.00;
+            if (offsetValue) updateSyncUI();
+            hideEmbeddedBadge();
+
+            // --- Priority 1: Embedded lyrics from FLAC Vorbis comments ---
+            if (embeddedLyricsData) {
+                if (embeddedLyricsData.syncedLyrics) {
+                    parseLrc(embeddedLyricsData.syncedLyrics);
+                    showEmbeddedBadge();
+                    return;
+                } else if (embeddedLyricsData.plainLyrics) {
+                    renderPlainLyrics(embeddedLyricsData.plainLyrics);
+                    showEmbeddedBadge();
+                    return;
+                }
+            }
+
+            // --- Priority 2: Online fetch from lrclib ---
+            if (!artist || !track) return;
+            try {
+                const res = await fetch(`https://lrclib.net/api/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(track)}`);
+                const data = await res.json();
+                if (data && data.syncedLyrics) {
+                    parseLrc(data.syncedLyrics);
+                }
+                else if (data && data.plainLyrics) {
+                    renderPlainLyrics(data.plainLyrics);
+                }
+                else {
+                    lyricsContainer.innerHTML = '<p class="text-white/50 text-2xl mt-32 w-full text-center">No lyrics available.</p>';
+                }
+            } catch(e) { 
+                lyricsContainer.innerHTML = '<p class="text-white/50 text-2xl mt-32 w-full text-center">Could not load lyrics.</p>'; 
+            }
+        }
+
+        function parseLrc(lrc) {
+            const lines = lrc.split('\n');
+            let tempLyrics = [];
+            const regex = /\[(\d{2}):(\d{2}(?:\.\d{2,3})?)\](.*)/;
+            
+            lines.forEach(line => {
+                const match = regex.exec(line);
+                if(match) {
+                    const min = parseInt(match[1]), sec = parseFloat(match[2]), text = match[3].trim();
+                    if(text) tempLyrics.push({ time: (min * 60) + sec, text: text });
+                }
+            });
+
+            currentLyrics = [];
+            
+            if (tempLyrics.length > 0 && tempLyrics[0].time > 3.0) {
+                currentLyrics.push({ time: 0, duration: tempLyrics[0].time, text: '', isDots: true });
+            }
+
+            for(let i = 0; i < tempLyrics.length; i++) {
+                let curr = tempLyrics[i];
+                let next = tempLyrics[i+1];
+                let gap = next ? (next.time - curr.time) : 10;
+                
+                if (gap > 15) {
+                    curr.duration = 4;
+                    currentLyrics.push(curr);
+                    currentLyrics.push({ time: curr.time + 5, duration: gap - 5, text: '', isDots: true });
+                } else {
+                    curr.duration = gap;
+                    currentLyrics.push(curr);
+                }
+            }
+            renderSyncedLyrics();
+        }
+
+        function renderSyncedLyrics() {
+            lyricsContainer.innerHTML = '';
+            const spacerTop = document.createElement('div');
+            spacerTop.className = 'min-h-[40vh] w-full flex-shrink-0';
+            lyricsContainer.appendChild(spacerTop);
+
+            currentLyrics.forEach((lyric, index) => {
+                const p = document.createElement('p');
+                p.className = 'lyric-line text-3xl md:text-5xl lg:text-6xl font-extrabold cursor-pointer w-full';
+                p.dataset.index = index;
+                
+                if (lyric.isDots) {
+                    p.classList.add('waiting-dots-container');
+                    p.innerHTML = `<div class="waiting-dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
+                } else {
+                    let charOffset = 0;
+                    let totalChars = lyric.text.length;
+                    const words = lyric.text.split(' ');
+                    
+                    words.forEach((word, wIdx) => {
+                        const span = document.createElement('span');
+                        span.className = 'lyric-word';
+                        span.textContent = word;
+                        
+                        let startPct = charOffset / totalChars;
+                        charOffset += word.length + 1; 
+                        let endPct = Math.min(1, charOffset / totalChars);
+                        
+                        span.dataset.start = startPct;
+                        span.dataset.end = endPct;
+                        
+                        p.appendChild(span);
+                        if (wIdx < words.length - 1) p.appendChild(document.createTextNode(' '));
+                    });
+                }
+
+                p.addEventListener('click', () => {
+                    if (isDemoMode) return; 
+                    if(audioElement.duration) {
+                        let targetTime = (lyric.time * lyricStretch) + lyricOffset;
+                        if (targetTime < audioElement.duration && targetTime >= 0) {
+                            audioElement.currentTime = targetTime;
+                            playAudio();
+                        }
+                    }
+                });
+                lyricsContainer.appendChild(p);
+            });
+
+            const spacerBottom = document.createElement('div');
+            spacerBottom.className = 'min-h-[50vh] w-full flex-shrink-0';
+            lyricsContainer.appendChild(spacerBottom);
+            
+            if (!isDemoMode) updateLyricsSync(0);
+        }
+
+        function renderPlainLyrics(text) {
+            lyricsContainer.innerHTML = `<div class="mt-16 text-2xl md:text-3xl leading-relaxed text-white/80 whitespace-pre-wrap">${text}</div>`;
+        }
+
+        function updateLyricsSync(currentTime) {
+            if (!isLyricsView || currentLyrics.length === 0) return;
+            let lyricSpaceTime = (currentTime - lyricOffset) / lyricStretch;
+            
+            let newIndex = -1;
+            for(let i = 0; i < currentLyrics.length; i++) {
+                if(lyricSpaceTime >= currentLyrics[i].time) newIndex = i;
+                else break;
+            }
+
+            if (newIndex === -1 && currentTime === 0) {
+                newIndex = 0;
+            }
+
+            if(newIndex !== currentLyricIndex && newIndex !== -1) {
+                if(currentLyricIndex !== -1) {
+                    const oldEl = lyricsContainer.children[currentLyricIndex + 1]; 
+                    if(oldEl) {
+                        oldEl.classList.remove('active');
+                        oldEl.querySelectorAll('.lyric-word').forEach(w => w.style.setProperty('--fill', '100%'));
+                    }
+                }
+                const newEl = lyricsContainer.children[newIndex + 1];
+                if(newEl) {
+                    newEl.classList.add('active');
+                    const containerHalf = lyricsContainer.clientHeight / 2;
+                    const elOffset = newEl.offsetTop + (newEl.clientHeight / 2);
+                    lyricsContainer.scrollTo({ top: elOffset - containerHalf, behavior: 'smooth' });
+                }
+                currentLyricIndex = newIndex;
+            }
+
+            isWiping = false;
+            if (currentLyricIndex !== -1 && !audioElement.paused) {
+                const activeLine = currentLyrics[currentLyricIndex];
+                const activeEl = lyricsContainer.children[currentLyricIndex + 1];
+                
+                if (activeLine && activeEl && !activeLine.isDots) {
+                    let wipeDuration = activeLine.text.length * 0.08;
+                    wipeDuration = Math.max(1.5, Math.min(wipeDuration, activeLine.duration * 0.9)); 
+                    
+                    let progress = (lyricSpaceTime - activeLine.time) / wipeDuration;
+                    progress = Math.max(0, Math.min(1, progress));
+                    
+                    const words = activeEl.querySelectorAll('.lyric-word');
+                    words.forEach(word => {
+                        let start = parseFloat(word.dataset.start);
+                        let end = parseFloat(word.dataset.end);
+                        
+                        let wordProgress = (progress - start) / (end - start);
+                        wordProgress = Math.max(0, Math.min(1, wordProgress));
+                        
+                        word.style.setProperty('--fill', `${wordProgress * 100}%`);
+
+                        if (wordProgress > 0 && wordProgress < 1) {
+                            isWiping = true;
+                            const rect = word.getBoundingClientRect();
+                            wipeX = rect.left + (rect.width * wordProgress);
+                            wipeY = rect.top + (rect.height / 2);
+                        }
+                    });
+                }
+            }
+        }
+
+        function extractColor(img) {
+            const canvas = document.createElement('canvas'); const ctx = canvas.getContext('2d');
+            canvas.width = 64; canvas.height = 64;
+            try {
+                ctx.drawImage(img, 0, 0, 64, 64);
+                const data = ctx.getImageData(0, 0, 64, 64).data;
+                let newColors = [];
+                for(let i = 0; i < data.length; i += 4 * 6) { 
+                    let r = data[i], g = data[i+1], b = data[i+2];
+                    if (r < 20 && g < 20 && b < 20) continue; 
+                    if (r > 245 && g > 245 && b > 245) continue; 
+                    let isDistinct = true;
+                    for (let c of newColors) {
+                        if (Math.abs(r - c[0]) + Math.abs(g - c[1]) + Math.abs(b - c[2]) < 90) { isDistinct = false; break; }
+                    }
+                    if (isDistinct) { newColors.push([r, g, b]); if (newColors.length >= 8) break; }
+                }
+                if(newColors.length < 4 && newColors.length > 0) {
+                    let base = newColors[0];
+                    newColors.push([Math.min(255, base[0]+90), Math.max(0, base[1]-50), base[2]]);
+                    newColors.push([base[0], Math.min(255, base[1]+90), Math.max(0, base[2]-50)]);
+                    newColors.push([Math.max(0, base[0]-50), base[1], Math.min(255, base[2]+90)]);
+                }
+                if(newColors.length === 0) newColors = [[255, 45, 85], [88, 86, 214], [255, 149, 0], [90, 200, 250]];
+                extractedColors = newColors;
+                particles.forEach(p => p.pickColor());
+            } catch (e) { console.warn("Could not extract colors", e); }
+        }
+
+        function checkEasterEgg() {
+            if (currentTrackIndex >= 0 && playlist[currentTrackIndex]) {
+                const track = playlist[currentTrackIndex];
+                const tName = (track.name || "").toLowerCase();
+                const tTitle = (track.title || "").toLowerCase();
+                const tArtist = (track.artist || "").toLowerCase();
+                
+                // Matches conditions for "Back to friends - sombr"
+                const isTargetTrack = 
+                    (tTitle.includes("back to friends") && tArtist.includes("sombr")) ||
+                    tName.includes("back to friends - sombr") ||
+                    (tName.includes("back to friends") && tName.includes("sombr"));
+
+                if (isTargetTrack && isPlaying) {
+                    easterEgg.style.opacity = '1';
+                } else {
+                    easterEgg.style.opacity = '0';
+                }
+            } else {
+                easterEgg.style.opacity = '0';
+            }
+        }
+
+        function initAudio() {
+            if (audioContext) return;
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioContext.createAnalyser(); analyser.fftSize = 512;
+            source = audioContext.createMediaElementSource(audioElement);
+            source.connect(analyser); analyser.connect(audioContext.destination);
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+        }
+
+        function playAudio() {
+            initAudio(); if (audioContext.state === 'suspended') audioContext.resume();
+            audioElement.play(); 
+            isPlaying = true;
+            playIcon.classList.add('hidden'); pauseIcon.classList.remove('hidden');
+            debouncedUpdatePlaylistUI(); 
+            checkEasterEgg();
+        }
+        function pauseAudio() {
+            audioElement.pause(); 
+            isPlaying = false;
+            playIcon.classList.remove('hidden'); pauseIcon.classList.add('hidden');
+            debouncedUpdatePlaylistUI(); 
+            checkEasterEgg();
+        }
+        function togglePlay() { if (!audioElement.src) return; if (isPlaying) pauseAudio(); else playAudio(); }
+
+        function formatTime(seconds) {
+            const min = Math.floor(seconds / 60); const sec = Math.floor(seconds % 60);
+            return `${min}:${sec < 10 ? '0' : ''}${sec}`;
+        }
+
+        // --- PLAYLIST LOGIC ---
+        
+        function debouncedUpdatePlaylistUI() {
+            clearTimeout(playlistUpdateTimeout);
+            playlistUpdateTimeout = setTimeout(updatePlaylistUI, 50);
+        }
+
+        function updatePlaylistUI() {
+            playlistContainer.innerHTML = '';
+            playlistCount.textContent = `${playlist.length} track${playlist.length !== 1 ? 's' : ''}`;
+            
+            if (playlist.length === 0) {
+                playlistContainer.innerHTML = '<div class="text-white/50 text-sm text-center py-6">No tracks uploaded</div>';
+                return;
+            }
+
+            playlist.forEach((track, i) => {
+                const item = document.createElement('div');
+                const isCurrent = i === currentTrackIndex;
+                
+                item.className = `p-2 rounded-lg cursor-pointer transition-all flex items-center gap-3 group ${
+                    isCurrent ? 'bg-white/20 border border-white/20 shadow-md' : 'hover:bg-white/10 border border-transparent'
+                }`;
+                item.onclick = () => {
+                    if (currentTrackIndex !== i) loadAndPlayTrack(i);
+                };
+                
+                // Cover Art Container
+                const coverContainer = document.createElement('div');
+                coverContainer.className = 'w-12 h-12 bg-black/40 rounded flex-shrink-0 overflow-hidden flex items-center justify-center border border-white/10 relative shadow-inner';
+                
+                if (track.coverUrl) {
+                    const img = document.createElement('img');
+                    img.src = track.coverUrl;
+                    img.className = 'w-full h-full object-cover';
+                    coverContainer.appendChild(img);
+                } else {
+                    const icon = document.createElement('i');
+                    icon.setAttribute('data-lucide', 'music');
+                    icon.className = 'w-5 h-5 text-white/30';
+                    coverContainer.appendChild(icon);
+                }
+                
+                // Playing Indicator overlay
+                if (isCurrent && isPlaying) {
+                    const overlay = document.createElement('div');
+                    overlay.className = 'absolute inset-0 bg-black/50 flex items-center justify-center backdrop-blur-[1px]';
+                    overlay.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="text-white animate-pulse drop-shadow-md"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>`;
+                    coverContainer.appendChild(overlay);
+                }
+
+                // Text Info Container
+                const infoContainer = document.createElement('div');
+                infoContainer.className = 'flex flex-col flex-grow min-w-0 py-1 justify-center';
+                
+                const titleSpan = document.createElement('span');
+                titleSpan.className = `text-sm font-bold line-clamp-2 leading-tight ${isCurrent ? 'text-white' : 'text-white/90 group-hover:text-white'}`;
+                titleSpan.textContent = track.title || track.name;
+                
+                const artistSpan = document.createElement('span');
+                artistSpan.className = `text-xs mt-0.5 truncate ${isCurrent ? 'text-white/80' : 'text-white/50 group-hover:text-white/70'}`;
+                artistSpan.textContent = track.artist || "Unknown Artist";
+                
+                infoContainer.appendChild(titleSpan);
+                infoContainer.appendChild(artistSpan);
+                
+                item.appendChild(coverContainer);
+                item.appendChild(infoContainer);
+                
+                playlistContainer.appendChild(item);
+            });
+            
+            lucide.createIcons({ root: playlistContainer });
+        }
+
+        async function loadAndPlayTrack(index) {
+            if (index < 0 || index >= playlist.length) return;
+            
+            currentTrackIndex = index;
+            const track = playlist[index];
+            
+            isDemoMode = false;
+            demoScrollPos = 0;
+            pauseAudio();
+            
+            audioElement.src = track.url;
+            
+            topTrackTitle.textContent = track.title || track.name;
+            mainTrackTitle.textContent = track.title || track.name;
+            mainArtistName.textContent = track.artist || "Unknown Artist";
+
+            // Set Cover Art immediately if we have it, else reset to defaults
+            if (track.coverUrl) {
+                topCoverArt.src = track.coverUrl; mainCoverArt.src = track.coverUrl;
+                topCoverArt.onload = () => {
+                    topCoverArt.classList.remove('opacity-0'); topCoverPlaceholder.classList.add('hidden');
+                    mainCoverArt.classList.remove('opacity-0'); mainCoverText.classList.add('hidden');
+                    extractColor(topCoverArt);
+                };
+            } else {
+                topCoverArt.classList.add('opacity-0'); topCoverPlaceholder.classList.remove('hidden');
+                mainCoverArt.classList.add('opacity-0'); mainCoverText.classList.remove('hidden');
+                extractedColors = [[255, 45, 85], [88, 86, 214], [255, 149, 0], [90, 200, 250]];
+            }
+
+            // Start playing IMMEDIATELY without waiting for lyrics
+            playAudio(); 
+            
+            // Fire and forget lyrics fetch — pass embedded lyrics if available
+            fetchLyrics(track.artist, track.title, track.embeddedLyrics || null);
+        }
+
+        // --- EVENT LISTENERS ---
+
+        fileInput.addEventListener('change', async (e) => {
+            const files = Array.from(e.target.files); 
+            if (files.length === 0) return;
+            
+            const startPlaying = playlist.length === 0 || isDemoMode;
+            const startIndex = playlist.length;
+
+            for (const file of files) {
+                const guessedMeta = extractMetadataFromFilename(file.name);
+                const isFlac = file.name.toLowerCase().endsWith('.flac') || file.type === 'audio/flac';
+
+                // --- Extract FLAC lyrics BEFORE pushing to playlist to avoid race condition ---
+                let embeddedLyrics = null;
+                if (isFlac) {
+                    embeddedLyrics = await extractFlacLyrics(file);
+                }
+
+                const trackObj = {
+                    file: file,
+                    name: file.name,
+                    url: URL.createObjectURL(file),
+                    title: guessedMeta.track,
+                    artist: guessedMeta.artist,
+                    coverUrl: null,
+                    embeddedLyrics: embeddedLyrics,
+                    tagsExtracted: false
+                };
+                playlist.push(trackObj);
+
+                // Immediately extract tags in the background for each uploaded file
+                window.jsmediatags.read(file, {
+                    onSuccess: function(tag) {
+                        const tags = tag.tags;
+                        let metadataUpdated = false;
+
+                        if (tags) {
+                            if (tags.title && tags.title !== trackObj.title) {
+                                trackObj.title = tags.title;
+                                metadataUpdated = true;
+                            }
+                            if (tags.artist && tags.artist !== trackObj.artist) {
+                                trackObj.artist = tags.artist;
+                                metadataUpdated = true;
+                            }
+                            if (tags.picture) {
+                                let base64String = ""; const data = tags.picture.data;
+                                for (let i = 0; i < data.length; i++) base64String += String.fromCharCode(data[i]);
+                                trackObj.coverUrl = `data:${tags.picture.format};base64,${window.btoa(base64String)}`;
+                            }
+                        }
+                        trackObj.tagsExtracted = true;
+                        debouncedUpdatePlaylistUI();
+                        
+                        // If this track happens to be the one currently playing, update main UI components live
+                        if (currentTrackIndex === playlist.indexOf(trackObj)) {
+                            topTrackTitle.textContent = trackObj.title; 
+                            mainTrackTitle.textContent = trackObj.title; 
+                            mainArtistName.textContent = trackObj.artist;
+                            
+                            if (trackObj.coverUrl) {
+                                topCoverArt.src = trackObj.coverUrl; mainCoverArt.src = trackObj.coverUrl;
+                                topCoverArt.onload = () => {
+                                    topCoverArt.classList.remove('opacity-0'); topCoverPlaceholder.classList.add('hidden');
+                                    mainCoverArt.classList.remove('opacity-0'); mainCoverText.classList.add('hidden');
+                                    extractColor(topCoverArt);
+                                };
+                            }
+
+                            // FIX: If the background scan found the REAL song name, re-fetch the lyrics!
+                            if (metadataUpdated) {
+                                fetchLyrics(trackObj.artist, trackObj.title, trackObj.embeddedLyrics || null);
+                            }
+                            checkEasterEgg();
+                        }
+                    },
+                    onError: function(error) { 
+                        trackObj.tagsExtracted = true;
+                        debouncedUpdatePlaylistUI();
+                    }
+                });
+            }
+
+            debouncedUpdatePlaylistUI();
+            
+            if (startPlaying) {
+                loadAndPlayTrack(startIndex);
+            }
+
+            e.target.value = ''; // Reset input to allow selecting same files again if needed
+        });
+
+        // Automatic Track Progression
+        audioElement.addEventListener('ended', () => {
+            if (currentTrackIndex < playlist.length - 1) {
+                loadAndPlayTrack(currentTrackIndex + 1);
+            }
+        });
+
+        prevBtn.addEventListener('click', () => {
+            if (audioElement.currentTime > 3) {
+                audioElement.currentTime = 0;
+            } else if (currentTrackIndex > 0) {
+                loadAndPlayTrack(currentTrackIndex - 1);
+            }
+        });
+
+        nextBtn.addEventListener('click', () => {
+            if (currentTrackIndex < playlist.length - 1) {
+                loadAndPlayTrack(currentTrackIndex + 1);
+            }
+        });
+
+        playPauseBtn.addEventListener('click', togglePlay);
+
+        audioElement.addEventListener('timeupdate', () => {
+            currentTimeEl.textContent = formatTime(audioElement.currentTime);
+            if (audioElement.duration) {
+                progressBar.value = (audioElement.currentTime / audioElement.duration) * 100;
+                durationTimeEl.textContent = formatTime(audioElement.duration);
+            }
+        });
+
+        progressBar.addEventListener('input', () => { if (audioElement.duration) audioElement.currentTime = (progressBar.value / 100) * audioElement.duration; });
+        volumeBar.addEventListener('input', () => { audioElement.volume = volumeBar.value / 100; });
+
+        // Toggles
+        visToggleBtn.addEventListener('click', () => {
+            showVisualizer = !showVisualizer;
+            visCanvas.style.opacity = showVisualizer ? '1' : '0';
+            visToggleBtn.innerHTML = showVisualizer 
+                ? '<i data-lucide="eye" class="w-5 h-5"></i>' 
+                : '<i data-lucide="eye-off" class="w-5 h-5"></i>';
+            lucide.createIcons();
+        });
+
+        playlistToggleBtn.addEventListener('click', () => {
+            playlistPanel.classList.toggle('hidden');
+        });
+
+        lyricsBtn.addEventListener('click', () => {
+            isLyricsView = !isLyricsView;
+            if(isLyricsView) {
+                lyricsBtn.classList.remove('opacity-60'); lyricsBtn.classList.add('opacity-100', 'text-white', 'drop-shadow-[0_0_10px_rgba(255,255,255,0.8)]');
+                coverView.classList.add('opacity-0', 'scale-95'); coverView.classList.remove('z-10');
+                
+                lyricsView.classList.remove('opacity-0', 'translate-y-8'); 
+                lyricsView.classList.add('opacity-100', 'translate-y-0');
+                
+                lyricsContainer.classList.replace('pointer-events-none', 'pointer-events-auto');
+                syncWrapper.classList.replace('pointer-events-none', 'pointer-events-auto');
+                
+                if (currentLyricIndex !== -1 && !isDemoMode) {
+                    const activeEl = lyricsContainer.children[currentLyricIndex + 1];
+                    if (activeEl) {
+                        const containerHalf = lyricsContainer.clientHeight / 2;
+                        const elOffset = activeEl.offsetTop + (activeEl.clientHeight / 2);
+                        lyricsContainer.scrollTo({ top: elOffset - containerHalf, behavior: 'auto' });
+                    }
+                }
+            } else {
+                lyricsBtn.classList.add('opacity-60'); lyricsBtn.classList.remove('opacity-100', 'text-white', 'drop-shadow-[0_0_10px_rgba(255,255,255,0.8)]');
+                
+                lyricsView.classList.remove('opacity-100', 'translate-y-0'); 
+                lyricsView.classList.add('opacity-0', 'translate-y-8');
+                
+                lyricsContainer.classList.replace('pointer-events-auto', 'pointer-events-none');
+                syncWrapper.classList.replace('pointer-events-auto', 'pointer-events-none');
+
+                coverView.classList.remove('opacity-0', 'scale-95'); coverView.classList.add('z-10');
+                syncPanel.classList.add('hidden'); 
+            }
+        });
+
+        function updateSyncUI() {
+            offsetValue.textContent = (lyricOffset > 0 ? '+' : '') + lyricOffset.toFixed(1) + 's';
+            stretchValue.textContent = lyricStretch.toFixed(2) + 'x';
+        }
+        syncToggleBtn.addEventListener('click', () => { syncPanel.classList.toggle('hidden'); });
+        
+        offsetMinus.addEventListener('click', () => { lyricOffset -= 0.1; updateSyncUI(); });
+        offsetPlus.addEventListener('click', () => { lyricOffset += 0.1; updateSyncUI(); });
+        
+        stretchMinus.addEventListener('click', () => { lyricStretch = Math.max(0.5, lyricStretch - 0.05); updateSyncUI(); });
+        stretchPlus.addEventListener('click', () => { lyricStretch = Math.min(2.0, lyricStretch + 0.05); updateSyncUI(); });
+
+        // --- Constant Animation Loop ---
+        function drawVisualizer() {
+            animationId = requestAnimationFrame(drawVisualizer);
+            
+            // Background Lyric Scrolling Engine
+            if (isDemoMode && isLyricsView) {
+                demoScrollPos += 0.35;
+                lyricsContainer.scrollTop = demoScrollPos;
+                if (lyricsContainer.scrollTop >= lyricsContainer.scrollHeight - lyricsContainer.clientHeight - 2) {
+                    demoScrollPos = 0;
+                    lyricsContainer.scrollTop = 0;
+                }
+            } else if (audioElement && !isDemoMode) {
+                updateLyricsSync(audioElement.currentTime);
+            }
+
+            let bassAverage = 0;
+            if (analyser && !isDemoMode) {
+                analyser.getByteFrequencyData(dataArray);
+                let bassSum = 0;
+                for(let i=0; i<10; i++) bassSum += dataArray[i];
+                bassAverage = bassSum / 10;
+            } else if (isDemoMode) {
+                bassAverage = (Math.sin(Date.now() * 0.001) + 1) * 15; 
+            }
+            
+            let scale = 1 + (bassAverage / 255) * 0.15;
+            coverWrapper.style.transform = `scale(${scale})`;
+            
+            let glowColor1 = extractedColors[0] || [255,255,255];
+            let glowColor2 = extractedColors[1 % extractedColors.length] || glowColor1;
+            coverWrapper.style.boxShadow = `0 0 ${50 + bassAverage * 0.8}px rgba(${glowColor1[0]}, ${glowColor1[1]}, ${glowColor1[2]}, ${0.6 + (bassAverage/255)*0.4}), 0 0 ${100 + bassAverage * 1.5}px rgba(${glowColor2[0]}, ${glowColor2[1]}, ${glowColor2[2]}, ${0.4 + (bassAverage/255)*0.3})`;
+
+            bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+            bgCtx.globalCompositeOperation = 'source-over';
+            orbs.forEach((orb, index) => {
+                orb.update(bassAverage);
+                orb.draw(bgCtx, extractedColors[index % extractedColors.length]);
+            });
+
+            partCtx.clearRect(0, 0, particleCanvas.width, particleCanvas.height);
+            particles.forEach(p => { p.update(bassAverage); p.draw(partCtx); });
+
+            if (isWiping && isLyricsView && Math.random() > 0.3) { 
+                lyricSparks.push(new LyricSpark(wipeX, wipeY));
+            }
+
+            for (let i = lyricSparks.length - 1; i >= 0; i--) {
+                const s = lyricSparks[i];
+                s.update();
+                if (s.life <= 0) lyricSparks.splice(i, 1);
+                else s.draw(partCtx);
+            }
+
+            // Only draw visualizer bars if toggled on
+            if (showVisualizer) {
+                visCtx.clearRect(0, 0, visCanvas.width, visCanvas.height);
+                if (analyser && !isDemoMode) {
+                    const renderCount = Math.floor(analyser.frequencyBinCount * 0.6); 
+                    const barWidth = (visCanvas.width / renderCount) * 1.5;
+                    let barHeight; let x = 0;
+
+                    const visGradient = visCtx.createLinearGradient(0, 0, visCanvas.width, 0);
+                    if(extractedColors.length > 1) {
+                        extractedColors.forEach((color, idx) => {
+                            visGradient.addColorStop(idx / (extractedColors.length - 1), `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.9)`);
+                        });
+                    } else {
+                        visGradient.addColorStop(0, 'rgba(255,255,255,0.9)'); visGradient.addColorStop(1, 'rgba(255,255,255,0.9)');
+                    }
+                    
+                    visCtx.fillStyle = visGradient; visCtx.strokeStyle = 'rgba(255, 255, 255, 0.3)'; visCtx.lineWidth = 1;
+                    for (let i = 0; i < renderCount; i++) {
+                        barHeight = (dataArray[i] / 255) * (visCanvas.height * 0.35); 
+                        const yPos = visCanvas.height - barHeight;
+                        visCtx.fillRect(x, yPos, barWidth - 1, barHeight);
+                        visCtx.strokeRect(x, yPos, barWidth - 1, barHeight);
+                        x += barWidth;
+                    }
+                }
+            } else {
+                visCtx.clearRect(0, 0, visCanvas.width, visCanvas.height);
+            }
+        }
+        
+        // Initialize Demo Data & Start Loop
+        loadDemoLyrics();
+        drawVisualizer();
+    </script>
+</body>
+</html>
